@@ -56,11 +56,12 @@ LIMIT_TEMP = True
 COLOUR = False
 SYSINFO = {}
 
-DEFAULT_COLS_FILTER = ["UFT", "Vcore", "ARM", "Core", "H264", "TempCore", "TempPMIC", "IRQ", "RX", "TX",
+DEFAULT_COLS_FILTER = ["UFT", "Vcore", "arm", "core", "TempCore", "TempPMIC", "IRQ", "RX", "TX",
                        "CPU", "CPUuser", "CPUnice", "CPUsys", "CPUidle", "CPUiowt", "CPUirq", "CPUs/irq", "CPUtotal",
                        "GPUfree", "MEMfree", "MEMdelta", "MEMaccum"]
 
-EXTRA_COLS_FILTER = ["V3D", "ISP"]
+CLOCKS = ["arm", "core", "h264", "v3d", "isp", "hevc", "disp", "hdmi", "pixel"]
+EXTRA_COLS_FILTER = CLOCKS
 
 # [USER:8][NEW:1][MEMSIZE:3][MANUFACTURER:4][PROCESSOR:4][TYPE:8][REV:4]
 # NEW          23: will be 1 for the new scheme, 0 for the old scheme
@@ -613,29 +614,24 @@ def getBCM283X(storage, filter, STATS_WITH_VOLTS, STATS_WITH_PMIC_TEMP):
   else:
     volts = ""
 
-  farm = int(vcgencmd("measure_clock arm")) + 500000 if "ARM" in filter else 0
-  fcore = int(vcgencmd("measure_clock core")) + 500000 if "Core" in filter else 0
-  fh264 = int(vcgencmd("measure_clock h264")) + 500000 if "H264" in filter else 0
-  fv3d = int(vcgencmd("measure_clock v3d")) + 500000 if "V3D" in filter else 0
-  fisp = int(vcgencmd("measure_clock isp")) + 500000 if "ISP" in filter else 0
-
+  c = [i for i in CLOCKS if i in filter]
+  if c:
+    v = vcgencmd(f"measure_clock {' '.join(c)}")
+    f = dict(zip(c, [int(i) + 500000 for i in v.split()]))
+  else:
+    f = {}
   storage[2] = storage[1]
-  storage[1] = (time.time(),
-                [farm,
-                 fcore,
-                 fh264,
-                 fv3d,
-                 fisp,
-                 tCore, TCMAX,
-                 tPMIC, TPMAX,
-                 volts])
+  storage[1] = { "time" : time.time(),
+                 "freq": f,
+                 "temp": {"core": tCore, "coremax": TCMAX, "pmic": tPMIC, "pmicmax": TPMAX},
+                 "volt": volts }
 
-  if storage[2][0] != 0:
+  if storage[2]["time"] != 0:
     s1 = storage[1]
     s2 = storage[2]
-    dTime = s1[0] - s2[0]
+    dTime = s1["time"] - s2["time"]
     dTime = 1 if dTime <= 0 else dTime
-    storage[0] = (dTime, s1[1])
+    storage[0] = { "time": dTime, "freq": s1["freq"], "temp": s1["temp"], "volt": s1["volt"] }
 
 def getMemory(storage, filter, include_swap):
   MEMTOTAL = 0
@@ -771,101 +767,36 @@ def getsysinfo(HARDWARE):
 
   VCG_INT = vcgencmd_items("get_config int", isInt=True)
 
-  CORE_DEFAULT_IDLE = CORE_DEFAULT_BUSY = 250
-  H264_DEFAULT_IDLE = H264_DEFAULT_BUSY = 250
-  V3D_DEFAULT_IDLE = V3D_DEFAULT_BUSY = 250
-  ISP_DEFAULT_IDLE = ISP_DEFAULT_BUSY = 250
-
-  if VCG_INT.get("disable_auto_turbo", 0) == 0:
-    CORE_DEFAULT_BUSY += 50
-    H264_DEFAULT_BUSY += 50
-
-  if RPI_MODEL == "RPi1":
-    ARM_DEFAULT_IDLE = 700
-    SDRAM_DEFAULT = 400
-  elif RPI_MODEL == "RPi2":
-    ARM_DEFAULT_IDLE = 600
-    SDRAM_DEFAULT = 450
-  elif RPI_MODEL == "RPi3":
-    ARM_DEFAULT_IDLE = 600
-    SDRAM_DEFAULT = 450
-  elif RPI_MODEL == "RPi4":
-    ARM_DEFAULT_IDLE = 600
-    SDRAM_DEFAULT = 3200
-  else:
-    ARM_DEFAULT_IDLE = 600
-    SDRAM_DEFAULT = 450
-
   sysinfo["hardware"]   = HARDWARE
   sysinfo["model"]      = RPI_MODEL
   sysinfo["nproc"]      = len(grep("^processor", readfile("/proc/cpuinfo")).split("\n"))
 
-  # Kernel 4.8+ doesn't create cpufreq sysfs when force_turbo=1, in which case
-  # min/max frequencies will both be the same as current
-  if os.path.exists("/sys/devices/system/cpu/cpu0/cpufreq"):
-    sysinfo["arm_min"] = int(int(readfile("/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq"))/1000)
-    sysinfo["arm_max"] = int(int(readfile("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq"))/1000)
-  else:
-    sysinfo["arm_min"] = int((int(vcgencmd("measure_clock arm")) + 500000) / 1e6)
-    sysinfo["arm_max"] = sysinfo["arm_min"]
-
-  if "sdram_freq" not in VCG_INT:
-    VCG_INT["sdram_freq"] = int(int(vcgencmd("measure_clock pllh"))/1e6)
-
-  sysinfo["core_max"]   = VCG_INT.get("core_freq", VCG_INT.get("gpu_freq", CORE_DEFAULT_BUSY))
-  sysinfo["h264_max"]   = VCG_INT.get("h264_freq", VCG_INT.get("gpu_freq", H264_DEFAULT_BUSY))
-  sysinfo["v3d_max"]   = VCG_INT.get("v3d_freq", VCG_INT.get("gpu_freq", V3D_DEFAULT_BUSY))
-  sysinfo["isp_max"]   = VCG_INT.get("isp_freq", VCG_INT.get("gpu_freq", ISP_DEFAULT_BUSY))
-  sysinfo["sdram_max"]  = VCG_INT.get("sdram_freq", SDRAM_DEFAULT)
   sysinfo["arm_volt"]   = VCG_INT.get("over_voltage", 0)
   sysinfo["sdram_volt"] = MaxSDRAMOffset()
   sysinfo["temp_limit"] = VCG_INT.get("temp_limit", 85)
   sysinfo["force_turbo"]= (VCG_INT.get("force_turbo", 0) != 0)
 
-  if sysinfo["force_turbo"]:
-    core_min = sysinfo["core_max"]
-    h264_min = sysinfo["h264_max"]
-    v3d_min = sysinfo["v3d_max"]
-    isp_min = sysinfo["isp_max"]
-  else:
-    core_min = CORE_DEFAULT_IDLE
-    h264_min = H264_DEFAULT_IDLE
-    v3d_min = V3D_DEFAULT_IDLE
-    isp_min = ISP_DEFAULT_IDLE
-    core_min = sysinfo["core_max"] if sysinfo["core_max"] < core_min else core_min
-    h264_min = sysinfo["h264_max"] if sysinfo["h264_max"] < h264_min else h264_min
-    v3d_min = sysinfo["v3d_max"] if sysinfo["v3d_max"] < v3d_min else v3d_min
-    isp_min = sysinfo["isp_max"] if sysinfo["isp_max"] < isp_min else isp_min
-
-  sysinfo["core_min"] = core_min
-  sysinfo["h264_min"] = h264_min
-  sysinfo["v3d_min"] = v3d_min
-  sysinfo["isp_min"] = isp_min
-
-  # Calculate thresholds for green/yellow/red colour
-  arm_min = sysinfo["arm_min"] - 10
-  arm_max = sysinfo["arm_max"] - 5 if sysinfo["arm_max"] > ARM_DEFAULT_IDLE else 1e6
-
-  core_min = sysinfo["core_min"] - 10
-  core_max = sysinfo["core_max"] - 5 if sysinfo["core_max"] > CORE_DEFAULT_IDLE else 1e6
-
-  h264_min = sysinfo["h264_min"] - 10
-  h264_max = sysinfo["h264_max"] - 5 if sysinfo["h264_max"] > H264_DEFAULT_IDLE else 1e6
-
-  v3d_min = sysinfo["v3d_min"] - 10
-  v3d_max = sysinfo["v3d_max"] - 5 if sysinfo["v3d_max"] > V3D_DEFAULT_IDLE else 1e6
-
-  isp_min = sysinfo["isp_min"] - 10
-  isp_max = sysinfo["isp_max"] - 5 if sysinfo["isp_max"] > ISP_DEFAULT_IDLE else 1e6
-
-  limits = {}
-  limits["arm"] = (arm_min, arm_max)
-  limits["core"] = (core_min, core_max)
-  limits["h264"] = (h264_min, h264_max)
-  limits["v3d"] = (v3d_min, v3d_max)
-  limits["isp"] = (isp_min, isp_max)
-  sysinfo["limits"] = limits
-
+  sysinfo['limits'] = {}
+  sysinfo["min"] = {}
+  sysinfo["max"] = {}
+  for i in CLOCKS:
+    j = "pixel-bvb" if i == "pixel" else "m2mc" if i == "hdmi" else i
+    min = 250
+    max = 500
+    if os.path.exists(f"/sys/kernel/debug/clk/fw-clk-{j}/clk_min_rate"):
+      min = int(int(readfile(f"/sys/kernel/debug/clk/fw-clk-{j}/clk_min_rate"))/1000000)
+    else:
+      min = VCG_INT.get(f"{i}_freq_min", min)
+    if os.path.exists(f"/sys/kernel/debug/clk/fw-clk-{j}/clk_max_rate"):
+      max = int(int(readfile(f"/sys/kernel/debug/clk/fw-clk-{j}/clk_max_rate"))/1000000)
+    else:
+      max = VCG_INT.get(f"{i}_freq_max", max)
+    if sysinfo["force_turbo"]:
+      min = max
+    sysinfo["min"][i] = min
+    sysinfo["max"][i] = max
+    # Calculate thresholds for green/yellow/red colour
+    sysinfo['limits'][i] = (min - 10, max - 5)
   return sysinfo
 
 def ShowConfig(nice_value, priority_desc, sysinfo, args):
@@ -882,12 +813,6 @@ def ShowConfig(nice_value, priority_desc, sysinfo, args):
   VCG_INT    = vcgencmd_items("get_config int", isInt=False)
 
   NPROC      = sysinfo["nproc"]
-  ARM_MIN    = sysinfo["arm_min"]
-  ARM_MAX    = sysinfo["arm_max"]
-  CORE_MIN   = sysinfo["core_min"]
-  CORE_MAX   = sysinfo["core_max"]
-  H264_MAX   = sysinfo["h264_max"]
-  SDRAM_MAX  = sysinfo["sdram_max"]
   ARM_VOLT   = sysinfo["arm_volt"]
   SDRAM_VOLT = sysinfo["sdram_volt"]
   TEMP_LIMIT = sysinfo["temp_limit"]
@@ -919,9 +844,8 @@ def ShowConfig(nice_value, priority_desc, sysinfo, args):
   print("  Config: v%s, args \"%s\", priority %s (%s)" % (VERSION, " ".join(args), priority_desc, nv))
   print("   Board: %d x %s core%s available, %s governor (%s)" %  (NPROC, ARM_ARCH, "s"[NPROC==1:], GOV, sysinfo["hardware"]))
   print("  Memory: %sMB (split %sMB ARM, %sMB GPU)%s" % (MEM_MAX, MEM_ARM, MEM_GPU, SWAP_MEM))
-  print("HW Block: | %s | %s | %s | %s |" % ("ARM".center(7), "Core".center(6), "H264".center(6), "SDRAM".center(11)))
-  print("Min Freq: | %s | %s | %s | %s |" % (MHz(ARM_MIN,4,7), MHz(CORE_MIN,3,6), MHz(0,3,6),        MHz(SDRAM_MAX,3,11)))
-  print("Max Freq: | %s | %s | %s | %s |" % (MHz(ARM_MAX,4,7), MHz(CORE_MAX,3,6), MHz(H264_MAX,3,6), MHz(SDRAM_MAX,3,11)))
+  for i in CLOCKS:
+    print("HW Block: | %s | Min Freq: %s | Max Freq : %s |" % (i.center(7), MHz(sysinfo["min"][i],4,7), MHz(sysinfo["max"][i],4,7)))
 
   if vCore and (len(vCore) - vCore.find(".")) < 5:
     vCore = "%s00V" % vCore[:-1]
@@ -930,7 +854,7 @@ def ShowConfig(nice_value, priority_desc, sysinfo, args):
   v2 = "%d, %s" % (SDRAM_VOLT, vRAM)
   v1 = "+%s" % v1 if ARM_VOLT > 0 else v1
   v2 = "+%s" % v2 if SDRAM_VOLT > 0 else v2
-  print("Voltages: | %s | %s |" % (v1.center(25), v2.center(11)))
+  print("Voltages: | %s | %s |" % (v1.center(27), v2.center(18)))
 
   # Chop "Other" properties up into multiple lines of limited length strings
   line = ""
@@ -976,11 +900,9 @@ def ShowHeadings(filter, display_flags, sysinfo):
   if display_flags["core_volts"]:
     (HDR1, HDR2) = addHeadingValue(filter, "Vcore", "Vcore ", HDR1, HDR2)
 
-  (HDR1, HDR2) = addHeadingValue(filter, "ARM",              "    ARM", HDR1, HDR2)
-  (HDR1, HDR2) = addHeadingValue(filter, "Core",             "   Core", HDR1, HDR2)
-  (HDR1, HDR2) = addHeadingValue(filter, "H264",             "   H264", HDR1, HDR2)
-  (HDR1, HDR2) = addHeadingValue(filter, "V3D",              "    V3D", HDR1, HDR2)
-  (HDR1, HDR2) = addHeadingValue(filter, "ISP",              "    ISP", HDR1, HDR2)
+  for i in CLOCKS:
+    (HDR1, HDR2) = addHeadingValue(filter, i, f"{i:>7}", HDR1, HDR2)
+
   (HDR1, HDR2) = addHeadingValue(filter, "TempCore", "Core Temp (Max)", HDR1, HDR2)
 
   if display_flags["temp_pmic"]:
@@ -1085,33 +1007,25 @@ def ShowStats(filter, display_flags, sysinfo, threshold, bcm2385, irq, network, 
     LINE = addDetailValue(filter, "UFT", uft, LINE)
 
   limits = sysinfo["limits"]
-  (arm_min, arm_max) = limits["arm"]
-  (core_min, core_max) = limits["core"]
-  (h264_min, h264_max) = limits["h264"]
-  (v3d_min, v3d_max) = limits["v3d"]
-  (isp_min, isp_max) = limits["isp"]
 
-  fTC = "%5.2fC" if bcm2385[3] < 100000 else "%5.1fC"
-  fTM = "%5.2fC" if bcm2385[4] < 100000 else "%5.1fC"
+  fTC = "%5.2fC" if bcm2385["temp"]["core"] < 100000 else "%5.1fC"
+  fTM = "%5.2fC" if bcm2385["temp"]["coremax"] < 100000 else "%5.1fC"
 
   if display_flags["core_volts"]:
-    LINE = addDetailValue(filter, "Vcore", bcm2385[9], LINE)
+    LINE = addDetailValue(filter, "Vcore", bcm2385["volt"], LINE)
 
-  LINE = addDetailValue(filter, "ARM",  colourise(bcm2385[0]/1000000, "%4dMhz", arm_min,     None,  arm_max, False), LINE)
-  LINE = addDetailValue(filter, "Core", colourise(bcm2385[1]/1000000, "%4dMhz",core_min,     None, core_max, False), LINE)
-  LINE = addDetailValue(filter, "H264", colourise(bcm2385[2]/1000000, "%4dMhz",       0, h264_min, h264_max, False), LINE)
-  LINE = addDetailValue(filter, "V3D",  colourise(bcm2385[3]/1000000, "%4dMhz",       0,  v3d_min,  v3d_max, False), LINE)
-  LINE = addDetailValue(filter, "ISP",  colourise(bcm2385[4]/1000000, "%4dMhz",       0,  isp_min,  isp_max, False), LINE)
+  for i in bcm2385["freq"].keys():
+    LINE = addDetailValue(filter, i,        colourise(bcm2385["freq"][i]/1000000, "%4dMhz", limits[i][0],     None,  limits[i][1], False), LINE)
 
   if "TempCore" in filter:
-    LINE = addDetailValue(filter, "TempCore", colourise(bcm2385[5]/1000,    fTC,         50.0,     70.0,     80.0, False), LINE)
-    LINE = addDetailValue(filter, "TempCore", colourise(bcm2385[6]/1000,    fTM,         50.0,     70.0,     80.0, False), LINE, prefix='(', suffix=')')
+    LINE = addDetailValue(filter, "TempCore", colourise(bcm2385["temp"]["core"]/1000,    fTC,         50.0,     70.0,     80.0, False), LINE)
+    LINE = addDetailValue(filter, "TempCore", colourise(bcm2385["temp"]["coremax"]/1000,    fTM,         50.0,     70.0,     80.0, False), LINE, prefix='(', suffix=')')
 
   if display_flags["temp_pmic"] and "TempPMIC" in filter:
-    fTC = "%5.2fC" if bcm2385[7] < 100000 else "%5.1fC"
-    fTM = "%5.2fC" if bcm2385[8] < 100000 else "%5.1fC"
-    LINE = addDetailValue(filter, "TempPMIC", colourise(bcm2385[7], fTC, 50.0, 70.0, 80.0, False), LINE)
-    LINE = addDetailValue(filter, "TempPMIC", colourise(bcm2385[8], fTM, 50.0, 70.0, 80.0, False), LINE, prefix='(', suffix=')')
+    fTC = "%5.2fC" if bcm2385["temp"]["pmic"] < 100000 else "%5.1fC"
+    fTM = "%5.2fC" if bcm2385["temp"]["pmicmax"] < 100000 else "%5.1fC"
+    LINE = addDetailValue(filter, "TempPMIC", colourise(bcm2385["temp"]["core"], fTC, 50.0, 70.0, 80.0, False), LINE)
+    LINE = addDetailValue(filter, "TempPMIC", colourise(bcm2385["temp"]["pmicmax"], fTM, 50.0, 70.0, 80.0, False), LINE, prefix='(', suffix=')')
 
   LINE = addDetailValue(filter, "IRQ", colourise(irq[0], "%6s", 500, 2500, 5000, True), LINE)
 
@@ -1666,7 +1580,7 @@ def main(args):
   NET = [(0, None), (0, None), (0, None)]
   PROC= [(0, None), (0, None), (0, None)]
   CPU = [(0, None), (0, None), (0, None)]
-  BCM = [(0, None), (0, None), (0, None)]
+  BCM = [{"time": 0}, {"time": 0}, {"time": 0}]
   MEM = [(0, None), (0, None), (0, None)]
   GPU = [(0, None), (0, None), (0, None)]
   CORE= [(0, None), (0, None), (0, None)]
@@ -1677,7 +1591,7 @@ def main(args):
     HARDWARE.GetThresholdValues(UFT, COLUMN_FILTER, STATS_THRESHOLD_CLEAR)
 
   getBCM283X(BCM, COLUMN_FILTER, STATS_WITH_VOLTS, STATS_WITH_PMIC_TEMP)
-  if BCM[1][1][7] == None:
+  if BCM[1]["temp"]["pmic"] == None:
     STATS_WITH_PMIC_TEMP = False
 
   getIRQ(IRQ, COLUMN_FILTER, sysinfo)
@@ -1766,7 +1680,7 @@ def main(args):
     if STATS_DELTAS or STATS_ACCUMULATED:
       getMemDeltas(DELTAS, COLUMN_FILTER, MEM, GPU)
 
-    ShowStats(COLUMN_FILTER, display_flags, sysinfo, UFT[0][1], BCM[0][1], IRQ[0][1], NET[0][1], CPU[0][1], MEM[0][1], GPU[0][1], CORE[0][1], DELTAS[0][1])
+    ShowStats(COLUMN_FILTER, display_flags, sysinfo, UFT[0][1], BCM[0], IRQ[0][1], NET[0][1], CPU[0][1], MEM[0][1], GPU[0][1], CORE[0][1], DELTAS[0][1])
 
     n = {}
     n["01#IRQ"] = IRQ[0][1][0] if IRQ[0][1][0] > PEAKVALUES["01#IRQ"] else PEAKVALUES["01#IRQ"]
