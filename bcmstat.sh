@@ -1008,9 +1008,6 @@ def ShowStats(filter, display_flags, sysinfo, threshold, bcm2385, irq, network, 
 
   limits = sysinfo["limits"]
 
-  fTC = "%5.2fC" if bcm2385["temp"]["core"] < 100000 else "%5.1fC"
-  fTM = "%5.2fC" if bcm2385["temp"]["coremax"] < 100000 else "%5.1fC"
-
   if display_flags["core_volts"]:
     LINE = addDetailValue(filter, "Vcore", bcm2385["volt"], LINE)
 
@@ -1018,6 +1015,8 @@ def ShowStats(filter, display_flags, sysinfo, threshold, bcm2385, irq, network, 
     LINE = addDetailValue(filter, i,        colourise(bcm2385["freq"][i]/1000000, "%4dMhz", limits[i][0],     None,  limits[i][1], False), LINE)
 
   if "TempCore" in filter:
+    fTC = "%5.2fC" if bcm2385["temp"]["core"] < 100000 else "%5.1fC"
+    fTM = "%5.2fC" if bcm2385["temp"]["coremax"] < 100000 else "%5.1fC"
     LINE = addDetailValue(filter, "TempCore", colourise(bcm2385["temp"]["core"]/1000,    fTC,         50.0,     70.0,     80.0, False), LINE)
     LINE = addDetailValue(filter, "TempCore", colourise(bcm2385["temp"]["coremax"]/1000,    fTM,         50.0,     70.0,     80.0, False), LINE, prefix='(', suffix=')')
 
