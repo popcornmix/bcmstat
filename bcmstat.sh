@@ -1023,7 +1023,7 @@ def ShowStats(filter, display_flags, sysinfo, threshold, bcm2385, irq, network, 
   if display_flags["temp_pmic"] and "TempPMIC" in filter:
     fTC = "%5.2fC" if bcm2385["temp"]["pmic"] < 100000 else "%5.1fC"
     fTM = "%5.2fC" if bcm2385["temp"]["pmicmax"] < 100000 else "%5.1fC"
-    LINE = addDetailValue(filter, "TempPMIC", colourise(bcm2385["temp"]["core"], fTC, 50.0, 70.0, 80.0, False), LINE)
+    LINE = addDetailValue(filter, "TempPMIC", colourise(bcm2385["temp"]["pmic"], fTC, 50.0, 70.0, 80.0, False), LINE)
     LINE = addDetailValue(filter, "TempPMIC", colourise(bcm2385["temp"]["pmicmax"], fTM, 50.0, 70.0, 80.0, False), LINE, prefix='(', suffix=')')
 
   LINE = addDetailValue(filter, "IRQ", colourise(irq[0], "%6s", 500, 2500, 5000, True), LINE)
