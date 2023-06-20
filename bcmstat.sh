@@ -1403,19 +1403,19 @@ def main(args):
       ALL_COLS = DEFAULT_COLS_FILTER + EXTRA_COLS_FILTER
       for column in a2.split(","):
         if column:
-          if column.startswith("-"):
-            colname = column[1:]
-            if colname in COLUMN_FILTER:
-              COLUMN_FILTER.remove(colname)
-          elif column.startswith("+"):
-            colname = column[1:]
-            if colname not in COLUMN_FILTER:
-              COLUMN_FILTER.append(colname)
-          else:
-            colname = column
-            newCols.append(column)
-
-          if colname and colname not in ALL_COLS:
+          found = False
+          colname = column[1:] if column.startswith("-") or column.startswith("+") else column
+          for i in ALL_COLS:
+            if colname.lower() == i.lower():
+              if column.startswith("-"):
+                COLUMN_FILTER.remove(i)
+              elif column.startswith("+"):
+                COLUMN_FILTER.append(i)
+              else:
+                newCols.append(i)
+              found = True
+              break
+          if not found:
             invalidCols.append(colname)
 
       if invalidCols:
