@@ -381,7 +381,8 @@ def vcgencmd_items(args, isInt=False):
 
 def vcdbg(args):
   global VCDBGCMD, SUDO
-  return runcommand("%s%s %s" % (SUDO, VCDBGCMD, args))
+  if VCDBGCMD:
+    return runcommand("%s%s %s" % (SUDO, VCDBGCMD, args))
 
 def readfile(infile, defaultval=""):
   if os.path.exists(infile):
@@ -678,13 +679,14 @@ def getMemory(storage, filter, include_swap):
 def getGPUMem(storage, filter, STATS_GPU_R, STATS_GPU_M):
   global GPU_ALLOCATED_R, GPU_ALLOCATED_M, VCGENCMD_GET_MEM
 
+  freemem_r = ""
   if VCGENCMD_GET_MEM:
     if not GPU_ALLOCATED_R:
       GPU_ALLOCATED_R = tobytes(vcgencmd("get_mem reloc_total"))
       GPU_ALLOCATED_M = tobytes(vcgencmd("get_mem malloc_total"))
     freemem_r = vcgencmd("get_mem reloc") if STATS_GPU_R else ""
     freemem_m = vcgencmd("get_mem malloc") if STATS_GPU_M else ""
-  else:
+  elif VCDBGCMD:
     vcgencmd("cache_flush")
 
     # Get gpu memory data. We only need to process a few lines near the top so
