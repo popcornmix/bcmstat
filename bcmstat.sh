@@ -34,7 +34,7 @@
 #
 ################################################################################
 from __future__ import print_function
-import os, sys, datetime, time, errno, subprocess, re, getpass
+import os, sys, datetime, time, errno, subprocess, re, getpass, struct
 import platform, socket, hashlib
 
 if sys.version_info >= (3, 0):
@@ -65,7 +65,9 @@ EXTRA_COLS_FILTER = CLOCKS
 
 # [USER:8][NEW:1][MEMSIZE:3][MANUFACTURER:4][PROCESSOR:4][TYPE:8][REV:4]
 # NEW          23: will be 1 for the new scheme, 0 for the old scheme
-# MEMSIZE      20: 0=256M 1=512M 2=1G
+# MEMSIZE      20: 0=256M 1=512M 2=1G 3=2G 4=4G 5=8G 6=16G 7=Other
+#                  Combined with NEW=1 the field reads as 0xf for "Other"
+#                  (e.g. 3GB) - prefer /proc/device-tree/chosen/rpi-sdram-size-gbit
 # MANUFACTURER 16: 0=SONY 1=EGOMAN 2=EMBEST 3=SONY JAPAN 4=EMBEST
 # PROCESSOR    12: 0=2835 1=2836 2=2837, 3=2838
 # TYPE         04: 0=MODELA 1=MODELB 2=MODELA+ 3=MODELB+ 4=Pi2 MODELB 5=ALPHA 6=CM 8=Pi3 9=Pi0 10=CM3 12=Pi0W
@@ -161,6 +163,20 @@ class RPIHardware():
         v = 0
       return '{:08x}'.format(v)
 
+  # /proc/device-tree/chosen/rpi-sdram-size-gbit is a 32-bit value (Gbit) populated
+  # by the firmware. Prefer it over the boardrev MEMSIZE field, which uses 0xf as
+  # an "Other" sentinel for sizes not enumerated by the legacy scheme.
+  def read_sdram_size(self):
+    data = self.readfile("/proc/device-tree/chosen/rpi-sdram-size-gbit", isbinary=True)
+    if not isinstance(data, (bytes, bytearray)) or len(data) != 4:
+      return None
+    gbit = struct.unpack(">I", data)[0]
+    if gbit <= 0:
+      return None
+    if gbit % 8 == 0:
+      return "%dGB" % (gbit // 8)
+    return "%dMB" % (gbit * 128)
+
   def set_rev_code(self, rev_code):
     if rev_code is None:
       rev_code = int(self.read_rev_code(), 16)
@@ -233,7 +249,14 @@ class RPIHardware():
     self.hardware_fmt["bits"] = self.hardware_raw["bits"]
 
     self.hardware_fmt["new"] = ["No", "Yes"][self.hardware_raw["new"]]
-    self.hardware_fmt["memsize"] = self.memsizes[self.hardware_raw["memsize"]]
+
+    sdram_size = self.read_sdram_size()
+    if sdram_size is not None:
+      self.hardware_fmt["memsize"] = sdram_size
+    elif 0 <= self.hardware_raw["memsize"] < len(self.memsizes):
+      self.hardware_fmt["memsize"] = self.memsizes[self.hardware_raw["memsize"]]
+    else:
+      self.hardware_fmt["memsize"] = "Other"
 
     if 0 <= self.hardware_raw["manufacturer"] < len(self.manufacturers):
       self.hardware_fmt["manufacturer"] = self.manufacturers[self.hardware_raw["manufacturer"]]
